@@ -240,7 +240,16 @@ def render_problem_ui() -> dict:
                              horizontal=True)
     dtype_A = np.float64 if "64" in dtype_A_label else np.float32
 
-    if not import_A:
+    if import_A and imported_A_array is not None:
+        dtype_A = imported_A_array.dtype
+        if imported_A_array.dtype not in (np.dtype("float64"), np.dtype("float32")):
+            st.info(
+                f"Detected dtype **{imported_A_array.dtype}** — preserved as-is.  "
+                "Dtype selector applies only to generated matrices."
+            )
+        else:
+            st.caption(f"ℹ️ Imported dtype **{imported_A_array.dtype}** preserved (selector ignored).")
+    elif not import_A:
         mem = _memory_estimate(m_values[0], dtype_A_label)
         if m_values[0] ** 2 * (8 if "64" in dtype_A_label else 4) > 400_000_000:
             st.warning(f"Estimated dense allocation: **{mem}** — may be slow or OOM.")

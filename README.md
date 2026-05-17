@@ -206,7 +206,7 @@ A checkbox **Import A from .npy file** appears at the top of the **Matrix A** se
 | Hermitian / PD checkboxes | Shown | Hidden |
 | Perturbation | Uses selected structure mask | Inherits sparsity pattern of imported array |
 | GPU transfer | After generation | After import, before solve |
-| dtype cast | Via dtype selector | Via dtype selector (cast applied after load) |
+| dtype cast | Via dtype selector | Preserved for float/complex dtypes; integer/bool inputs cast to float64 |
 
 ### Perturbation on imported matrices
 
@@ -217,7 +217,7 @@ When an imported A is perturbed, the noise is masked to the **non-zero pattern o
 - File format: `.npy` (saved with `numpy.save`)
 - Must be 2-D and square
 - All values must be finite (no NaN or Inf)
-- Any numeric dtype is accepted and cast to the selected dtype after loading
+- Float and complex dtypes (e.g. `float64`, `complex128`) are accepted and preserved as-is; integer/bool arrays are cast to `float64`
 
 ---
 
@@ -503,15 +503,17 @@ Sidebar                          Main area
                                     A: 🔧 generated / 📂 imported
 Matrix A                            [shape  dtype  nnz  density  memory]
   [ ] Import A from .npy            A entries / heatmap
-      └─ file uploader              ΔA entries / heatmap  (if perturbed)
+      └─ file uploader              Zoom: crop A[n_low:n_high] (expander)
+                                    ΔA entries / heatmap  (if perturbed)
   ── or, if not importing ──
   Type                           2. Eigenpairs via <solver>  [CPU] or [GPU]
   Seed                              [n_pairs  ρ(A)  spectral gap]
   Type param (if applicable)        Complex plane scatter + magnitude bar chart
-  Size m  [Sweep checkbox]          Eigenvalue table (scrollable, top 50)
-  Structure                         Eigenvector selector
-  Hermitian / PD checkboxes         Selected eigenvector entries / heatmap
-  dtype                             Per-pair quality metrics (expander)
+  Size m  [Sweep checkbox]          Filter eigenvalues by range (expander)
+  Structure                         Eigenvalue table (scrollable, top 50)
+  Hermitian / PD checkboxes         Eigenvector selector
+  dtype                             Selected eigenvector entries / heatmap
+                                    Per-pair quality metrics (expander)
 
 Perturbation                     3. Problem-specific sensitivity metrics
   Perturb A  [order + Sweep]        ρ(A) gauge/line | Spectral gap | κ(λᵢ) bar
@@ -547,4 +549,4 @@ Two panels: complex plane scatter (Re/Im, coloured by |λ|, unit circle shown) a
 Semi-log plot of the solver's internal residual or sub-diagonal norm per iteration. Direct solvers show "not applicable". Converged iteration marked with a dashed line.
 
 ### Heatmaps
-Diverging colourmap (blue=negative, red=positive, white=zero). Cell annotations for matrices ≤ 20×20. Spy plot fallback for matrices > 150×150. Complex matrices show real part with a caption.
+Diverging colourmap (blue=negative, red=positive, white=zero). Cell annotations for matrices ≤ 20×20. Spy plot fallback for matrices > 150×150. Complex matrices show Re and Im as side-by-side panels.

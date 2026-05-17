@@ -182,7 +182,8 @@ def _run_instance(
     try:
         # ── Build A ───────────────────────────────────────────────────────────
         if p.get("import_A") and p.get("imported_A_array") is not None:
-            A_cpu = p["imported_A_array"].astype(p["dtype_A"])
+            # Preserve original dtype — do not cast imported matrices
+            A_cpu = p["imported_A_array"]
             if use_gpu:
                 import cupy as cp
                 A = cp.asarray(A_cpu)
@@ -468,6 +469,33 @@ def _render_instance(inst: dict) -> None:
         with tab_heat:
             render_heatmap("A", A)
 
+        with st.expander("Zoom: crop submatrix  A[n_low : n_high, n_low : n_high]", expanded=False):
+            crop_bound = min(A.shape[0], A.shape[1])
+            crop_c1, crop_c2 = st.columns(2)
+            with crop_c1:
+                crop_low = int(st.number_input(
+                    "n_low  (inclusive)", min_value=0,
+                    max_value=crop_bound - 1, value=0, step=1, key="crop_low"))
+            with crop_c2:
+                crop_high = int(st.number_input(
+                    "n_high  (exclusive)", min_value=1,
+                    max_value=crop_bound, value=min(crop_bound, 10), step=1,
+                    key="crop_high"))
+            if crop_low >= crop_high:
+                st.warning("n_low must be strictly less than n_high.")
+            else:
+                crop_sub = A[crop_low:crop_high, crop_low:crop_high]
+                crop_sz  = crop_high - crop_low
+                st.caption(
+                    f"A[{crop_low}:{crop_high}, {crop_low}:{crop_high}]  —  "
+                    f"{crop_sz} × {crop_sz}"
+                )
+                crop_tab_e, crop_tab_h = st.tabs(["Entries", "Heatmap"])
+                with crop_tab_e:
+                    render_array(f"A[{crop_low}:{crop_high}]", crop_sub)
+                with crop_tab_h:
+                    render_heatmap(f"A[{crop_low}:{crop_high}]", crop_sub)
+
         if inst["delta_A"] is not None:
             st.markdown("**Perturbation ΔA**")
             tab_tbl_d, tab_heat_d = st.tabs(["ΔA entries", "ΔA heatmap"])
@@ -496,6 +524,73 @@ def _render_instance(inst: dict) -> None:
                    f"{sens['spectral_gap_rel']:.4f}" if n_pairs >= 2 else "N/A")
 
         render_spectrum_plot(vals, title=result["method"])
+
+        with st.expander("Filter eigenvalues by range", expanded=False):
+            ef_n_total = len(vals)
+            ef_re_all  = vals.real
+            ef_im_all  = vals.imag
+            st.caption(
+                f"Select a rectangle in the complex plane.  "
+                f"Total eigenvalues: {ef_n_total}."
+            )
+            ef_c1, ef_c2 = st.columns(2)
+            with ef_c1:
+                st.markdown("**Real part**")
+                ef_re_lo = st.number_input("Re  min", value=float(ef_re_all.min()),
+                                           format="%.4e", key="ef_re_lo")
+                ef_re_hi = st.number_input("Re  max", value=float(ef_re_all.max()),
+                                           format="%.4e", key="ef_re_hi")
+            with ef_c2:
+                st.markdown("**Imaginary part**")
+                ef_im_lo = st.number_input("Im  min", value=float(ef_im_all.min()),
+                                           format="%.4e", key="ef_im_lo")
+                ef_im_hi = st.number_input("Im  max", value=float(ef_im_all.max()),
+                                           format="%.4e", key="ef_im_hi")
+
+            ef_mask = (
+                (ef_re_all >= ef_re_lo) & (ef_re_all <= ef_re_hi) &
+                (ef_im_all >= ef_im_lo) & (ef_im_all <= ef_im_hi)
+            )
+            ef_n_in = int(ef_mask.sum())
+            ef_pct  = 100.0 * ef_n_in / ef_n_total if ef_n_total > 0 else 0.0
+
+            st.metric("In range", f"{ef_n_in} / {ef_n_total}  ({ef_pct:.1f}%)")
+
+            if ef_n_in == 0:
+                st.warning("No eigenvalues in this range — adjust the bounds.")
+            else:
+                ef_in  = vals[ef_mask]
+                ef_out = vals[~ef_mask]
+
+                ef_fig, ef_ax = plt.subplots(figsize=(5, 4))
+                if len(ef_out) > 0:
+                    ef_ax.scatter(ef_out.real, ef_out.imag, color="#cccccc",
+                                  s=25, linewidths=0, zorder=2,
+                                  label=f"Outside  ({len(ef_out)})")
+                ef_ax.scatter(ef_in.real, ef_in.imag, color="#e74c3c",
+                              s=55, edgecolors="#922b21", linewidths=0.6,
+                              zorder=4, label=f"In range  ({ef_n_in},  {ef_pct:.1f}%)")
+                ef_ax.axhline(0, color="#bbbbbb", lw=0.7, ls="--")
+                ef_ax.axvline(0, color="#bbbbbb", lw=0.7, ls="--")
+                ef_ax.plot(
+                    [ef_re_lo, ef_re_hi, ef_re_hi, ef_re_lo, ef_re_lo],
+                    [ef_im_lo, ef_im_lo, ef_im_hi, ef_im_hi, ef_im_lo],
+                    color="#e74c3c", lw=1.2, ls="--", zorder=5,
+                )
+                ef_ax.set_xlabel("Re(λ)", fontsize=9)
+                ef_ax.set_ylabel("Im(λ)", fontsize=9)
+                ef_ax.set_title(
+                    f"Eigenvalue filter — {ef_n_in}/{ef_n_total} selected ({ef_pct:.1f}%)",
+                    fontsize=9, fontweight="bold",
+                )
+                ef_ax.legend(fontsize=8)
+                ef_ax.tick_params(labelsize=8)
+                ef_fig.tight_layout()
+                st.pyplot(ef_fig, use_container_width=True)
+                plt.close(ef_fig)
+
+                with st.expander(f"Table of {ef_n_in} filtered eigenvalues", expanded=False):
+                    render_eigenvalue_table(ef_in)
 
         with st.expander("Eigenvalue table", expanded=False):
             render_eigenvalue_table(vals)
