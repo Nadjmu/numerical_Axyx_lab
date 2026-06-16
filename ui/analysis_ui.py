@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import matplotlib.colors as mcolors
 import seaborn as sns
 import streamlit as st
 
@@ -88,6 +89,24 @@ def _annotate_fmt(data: np.ndarray) -> str:
     return ".3f"
 
 
+def _symlog_norm(data: np.ndarray):
+    """
+    SymLogNorm centred at zero.
+    Linear in [-linthresh, linthresh] so exact zeros read as white;
+    log-scaled outside so order-of-magnitude differences get strong colour contrast.
+    Returns (norm, absmax).  norm is None when the data is all-zero.
+    """
+    absmax = float(np.nanmax(np.abs(data)))
+    if absmax == 0:
+        return None, 1.0
+    linthresh = max(absmax * 1e-3, np.finfo(float).tiny * 10)
+    norm = mcolors.SymLogNorm(
+        linthresh=linthresh, linscale=0.5,
+        vmin=-absmax, vmax=absmax, base=10,
+    )
+    return norm, absmax
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 2-D matrix heatmap
 # ──────────────────────────────────────────────────────────────────────────────
@@ -131,17 +150,20 @@ def render_heatmap(label: str, arr: np.ndarray) -> None:
         axes = [axes]
 
     for ax, (part_label, data) in zip(axes, parts):
-        absmax = float(np.nanmax(np.abs(data))) or 1.0
-        fmt    = _annotate_fmt(data) if annot else ""
+        norm, absmax = _symlog_norm(data)
+        fmt          = _annotate_fmt(data) if annot else ""
+        norm_kw      = ({"norm": norm}
+                        if norm is not None
+                        else {"center": 0, "vmin": -absmax, "vmax": absmax})
         sns.heatmap(
             data, ax=ax, cmap=_diverging_cmap(),
-            center=0, vmin=-absmax, vmax=absmax,
             annot=annot, fmt=fmt,
             annot_kws={"size": max(6, min(10, int(80 / max(m, n))))},
             linewidths=0.4 if m <= 40 else 0.0,
             linecolor="#cccccc", square=True,
-            cbar_kws={"shrink": 0.75, "label": "value"},
+            cbar_kws={"shrink": 0.75, "label": "value (log scale)"},
             xticklabels=n <= 30, yticklabels=m <= 30,
+            **norm_kw,
         )
         ax.set_title(f"{label}  [{part_label}]" if is_cx else label,
                      fontsize=10, fontweight="bold", pad=8)
@@ -166,14 +188,18 @@ def render_vector_heatmap(label: str, arr: np.ndarray) -> None:
     m    = data.shape[0]
 
     if m > _HEATMAP_MAX:
-        fig, ax = plt.subplots(figsize=(1.2, 5))
-        absmax  = float(np.nanmax(np.abs(data[:_HEATMAP_MAX]))) or 1.0
+        fig, ax  = plt.subplots(figsize=(1.2, 5))
+        d2d      = data[:_HEATMAP_MAX].reshape(-1, 1)
+        norm, _  = _symlog_norm(d2d)
+        norm_kw  = ({"norm": norm} if norm is not None
+                    else {"center": 0, "vmin": -float(np.nanmax(np.abs(d2d))) or 1.0,
+                          "vmax":  float(np.nanmax(np.abs(d2d))) or 1.0})
         sns.heatmap(
-            data[:_HEATMAP_MAX].reshape(-1, 1), ax=ax,
-            cmap=_diverging_cmap(), center=0, vmin=-absmax, vmax=absmax,
+            d2d, ax=ax, cmap=_diverging_cmap(),
             annot=False, linewidths=0.0, square=False,
-            cbar_kws={"shrink": 0.6, "label": "Re(value)"},
+            cbar_kws={"shrink": 0.6, "label": "value (log scale)"},
             xticklabels=False, yticklabels=False,
+            **norm_kw,
         )
         ax.set_title(label, fontsize=9, fontweight="bold", pad=6)
         st.caption(f"Showing first {_HEATMAP_MAX} of {m} entries (real part).")
@@ -182,9 +208,11 @@ def render_vector_heatmap(label: str, arr: np.ndarray) -> None:
         plt.close(fig)
         return
 
-    annot  = m <= _ANNOT_MAX
-    fmt    = _annotate_fmt(data) if annot else ""
-    absmax = float(np.nanmax(np.abs(data))) or 1.0
+    annot        = m <= _ANNOT_MAX
+    fmt          = _annotate_fmt(data) if annot else ""
+    norm, absmax = _symlog_norm(data.reshape(-1, 1))
+    norm_kw      = ({"norm": norm} if norm is not None
+                    else {"center": 0, "vmin": -absmax, "vmax": absmax})
 
     cell_h = max(0.35, min(0.7, 6.0 / m))
     fig_h  = min(m * cell_h + 1.0, 9.0)
@@ -192,13 +220,13 @@ def render_vector_heatmap(label: str, arr: np.ndarray) -> None:
     fig, ax = plt.subplots(figsize=(1.6, fig_h))
     sns.heatmap(
         data.reshape(-1, 1), ax=ax, cmap=_diverging_cmap(),
-        center=0, vmin=-absmax, vmax=absmax,
         annot=annot, fmt=fmt,
         annot_kws={"size": max(6, min(9, int(60 / m)))},
         linewidths=0.4 if m <= 40 else 0.0,
         linecolor="#cccccc", square=False,
-        cbar_kws={"shrink": 0.6, "label": "Re(value)"},
+        cbar_kws={"shrink": 0.6, "label": "value (log scale)"},
         xticklabels=False, yticklabels=m <= 30,
+        **norm_kw,
     )
     ax.set_title(label, fontsize=9, fontweight="bold", pad=6)
     ax.set_ylabel("index", fontsize=8)

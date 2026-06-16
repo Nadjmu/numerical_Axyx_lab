@@ -407,6 +407,7 @@ if run:
     bar.empty()
     st.session_state.series_list = series_list
     st.session_state.compare     = cmp
+    st.session_state.pop("_lab2_pdf_bytes", None)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -790,12 +791,7 @@ def _render_section6(active_inst: dict) -> None:
         )
 
 
-def _render_section7(active_inst: dict, series_list: list) -> None:
-    st.header("7. Summary")
-    if active_inst.get("error"):
-        st.error(active_inst["error"])
-        return
-
+def _build_summary_text(active_inst: dict, series_list: list) -> str:
     p    = active_inst.get("prob_params", {})
     s    = active_inst.get("solver_params", {})
     res  = active_inst["result"]
@@ -806,16 +802,16 @@ def _render_section7(active_inst: dict, series_list: list) -> None:
 
     device_str = "GPU" if active_inst.get("use_gpu") else "CPU"
     source_str = "imported (.npy)" if active_inst.get("imported_A") else active_inst.get("matrix_type", "N/A")
+    A          = active_inst["A"]
 
     lines = [
-        "=== Numerical Ax = λx Lab — Experiment Summary ===",
+        "=== Numerical Ax = lambda*x Lab — Experiment Summary ===",
         "",
         "-- MATRIX --",
         f"  Source        : {source_str}",
-        f"  Structure     : {active_inst.get('structure', 'N/A')} "
-        f"(param={active_inst.get('struct_param', 'N/A')})",
-        f"  Size          : {active_inst['m']} × {active_inst['m']}",
-        f"  dtype         : {p.get('dtype_A', 'N/A')}",
+        f"  Structure     : {active_inst.get('structure', 'N/A')} (param={active_inst.get('struct_param', 'N/A')})",
+        f"  Size          : {active_inst['m']} x {active_inst['m']}",
+        f"  dtype         : {A.dtype}",
         f"  Hermitian     : {p.get('make_hermitian', False)}",
         f"  Positive def. : {p.get('make_pd', False)}",
         f"  Perturbed     : {p.get('perturb_A', False)}"
@@ -829,13 +825,13 @@ def _render_section7(active_inst: dict, series_list: list) -> None:
         f"  Converged at  : {res.get('converged_at', 'N/A')} iterations",
         f"  Message       : {res.get('message', '')}",
         "",
-        "-- SENSITIVITY METRICS (Section 3) --",
-        f"  Spectral radius ρ(A)   : {sens['spectral_radius']:.6e}",
+        "-- SENSITIVITY METRICS --",
+        f"  Spectral radius rho(A) : {sens['spectral_radius']:.6e}",
         f"  Spectral gap (abs)     : {sens['spectral_gap_abs']:.6e}",
         f"  Spectral gap (rel)     : {sens['spectral_gap_rel']:.6e}",
-        f"  ‖A‖₂                   : {sens['norm_A']:.6e}",
+        f"  ||A||_2                : {sens['norm_A']:.6e}",
         "",
-        "-- SOLUTION QUALITY METRICS (Section 4) --",
+        "-- SOLUTION QUALITY --",
     ]
 
     res_norms = qual.get("residual_norms", [])
@@ -844,43 +840,175 @@ def _render_section7(active_inst: dict, series_list: list) -> None:
     prec      = qual.get("residual_prec", "N/A")
 
     if res_norms:
-        lines.append(f"  Mean eigenvector residual  : {float(np.mean(res_norms)):.4e}")
-        lines.append(f"  Max  eigenvector residual  : {float(np.max(res_norms)):.4e}")
+        lines.append(f"  Mean eigvec residual  ||Av-lv||/(||A||||v||) : {float(np.mean(res_norms)):.4e}")
+        lines.append(f"  Max  eigvec residual                         : {float(np.max(res_norms)):.4e}")
     if rq_accs:
-        lines.append(f"  Mean RQ deviation          : {float(np.mean(rq_accs)):.4e}")
-        lines.append(f"  Max  RQ deviation          : {float(np.max(rq_accs)):.4e}")
+        lines.append(f"  Mean RQ deviation  |lambda~-rho(v)|/max(|l|,1) : {float(np.mean(rq_accs)):.4e}")
+        lines.append(f"  Max  RQ deviation                               : {float(np.max(rq_accs)):.4e}")
     if orth_err is not None:
-        lines.append(f"  Eigenvector orth. error    : {orth_err:.4e}")
-    lines.append(f"  Residual precision         : {prec}")
+        lines.append(f"  Eigvec orth. error  ||V^H V - I||_F : {orth_err:.4e}")
+    lines.append(f"  Residual precision                   : {prec}")
 
     lines += ["", "-- EIGENVALUES (top 10 by magnitude) --"]
     for i in range(min(10, n)):
         lam = vals[i]
-        lines.append(
-            f"  λ_{i+1:2d}: Re={lam.real:+.6e}  Im={lam.imag:+.6e}  |λ|={abs(lam):.6e}"
-        )
+        lines.append(f"  lambda_{i+1:2d}: Re={lam.real:+.6e}  Im={lam.imag:+.6e}  |lambda|={abs(lam):.6e}")
     if n > 10:
         lines.append(f"  ... ({n - 10} more eigenvalues not shown)")
 
     lines += [
         "",
         "-- EXPERIMENT SCALE --",
-        f"  Series  : {len(series_list)}",
-        f"  Instances per series: {len(series_list[0]['instances']) if series_list else 0}",
+        f"  Series            : {len(series_list)}",
+        f"  Instances/series  : {len(series_list[0]['instances']) if series_list else 0}",
         "",
         "=== END SUMMARY ===",
     ]
+    return "\n".join(lines)
 
+
+def _build_pdf_bytes(active_inst: dict, series_list: list) -> bytes:
+    import io
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    summary = _build_summary_text(active_inst, series_list)
+    A       = active_inst["A"]
+    vals    = active_inst["result"]["eigenvalues"]
+    sens    = active_inst["sensitivity"]
+    qual    = active_inst["quality"]
+    sweep_p = _get_sweep_param(series_list)
+    eps     = np.finfo(float).eps
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+
+        # Page 1 — summary text
+        fig = plt.figure(figsize=(8.5, 11))
+        ax  = fig.add_axes([0.05, 0.03, 0.90, 0.94])
+        ax.axis("off")
+        ax.text(0, 1, summary, fontsize=6.5, family="monospace",
+                va="top", ha="left", transform=ax.transAxes)
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+        # Page 2 — A heatmap
+        A_disp  = A.real if np.iscomplexobj(A) else A
+        title_A = "Matrix A" + (" (Re)" if np.iscomplexobj(A) else "")
+        fig, ax = plt.subplots(figsize=(7, 6))
+        if min(A.shape) > 150:
+            ax.spy(A_disp, markersize=1, color="#2980b9")
+            ax.set_title(f"{title_A} — sparsity pattern", fontsize=10, fontweight="bold")
+        else:
+            absmax = float(np.nanmax(np.abs(A_disp))) or 1.0
+            pal = sns.diverging_palette(220, 10, as_cmap=True)
+            sns.heatmap(A_disp, ax=ax, cmap=pal, vmin=-absmax, vmax=absmax, center=0,
+                        annot=min(A.shape) <= 20, fmt=".2g",
+                        linewidths=0.3 if min(A.shape) <= 20 else 0)
+            ax.set_title(title_A, fontsize=10, fontweight="bold")
+        fig.tight_layout()
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+        # Page 3 — spectrum (complex plane + magnitude bar)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        mags   = np.abs(vals)
+        logmag = np.log10(mags + 1e-300)
+        sc = ax1.scatter(vals.real, vals.imag, c=logmag, cmap="viridis",
+                         s=30, alpha=0.85, edgecolors="none")
+        theta = np.linspace(0, 2 * np.pi, 300)
+        ax1.plot(np.cos(theta), np.sin(theta), "k--", lw=0.7, alpha=0.35)
+        ax1.axhline(0, color="#cccccc", lw=0.6)
+        ax1.axvline(0, color="#cccccc", lw=0.6)
+        ax1.set_xlabel("Re(lambda)", fontsize=9)
+        ax1.set_ylabel("Im(lambda)", fontsize=9)
+        ax1.set_title("Spectrum — complex plane", fontsize=10, fontweight="bold")
+        plt.colorbar(sc, ax=ax1, label="log10|lambda|", shrink=0.85)
+        top50 = np.sort(mags)[::-1][:50]
+        ax2.bar(range(len(top50)), top50, color="#2980b9", alpha=0.85, width=0.8)
+        ax2.set_yscale("log")
+        ax2.set_xlabel("Index (magnitude-sorted)", fontsize=9)
+        ax2.set_ylabel("|lambda|", fontsize=9)
+        ax2.set_title(f"|lambda| sorted (top {len(top50)})", fontsize=10, fontweight="bold")
+        fig.suptitle(
+            f"{active_inst.get('matrix_type', '')} | {active_inst.get('solver_name', '')}",
+            fontsize=10, y=1.01,
+        )
+        fig.tight_layout()
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+        # Page 4 — quality metrics sweep (if multi-instance)
+        all_good = [(s, [i for i in s["instances"] if not i.get("error")])
+                    for s in series_list]
+        all_good = [(s, insts) for s, insts in all_good if insts]
+        total_insts = sum(len(insts) for _, insts in all_good)
+        if total_insts > 1:
+            fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+            specs = [
+                (lambda inst: float(np.mean(inst["quality"]["residual_norms"]))
+                 if inst["quality"]["residual_norms"] else None,
+                 "Mean eigvec residual", "log10(mean ||Av-lv||/(||A||||v||))"),
+                (lambda inst: float(np.mean(inst["quality"]["rayleigh_accuracies"]))
+                 if inst["quality"]["rayleigh_accuracies"] else None,
+                 "Mean RQ deviation", "log10(mean |l~-rho(v)|/max(|l|,1))"),
+                (lambda inst: inst["quality"].get("orthogonality_error"),
+                 "Eigvec orth. error", "log10(||V^H V - I||_F)"),
+            ]
+            for ax_i, (fn, title, ylabel) in enumerate(specs):
+                for si, (ser, insts) in enumerate(all_good):
+                    color  = _SERIES_COLORS[si % len(_SERIES_COLORS)]
+                    raw    = [fn(i) for i in insts]
+                    logged = [np.log10(v) if v is not None and v > 0 else np.log10(eps)
+                              for v in raw]
+                    x_vals = _sweep_x_values(insts, sweep_p)
+                    axes[ax_i].plot(x_vals, logged, color=color, lw=1.8,
+                                    marker="o", markersize=4, label=ser["label"])
+                axes[ax_i].axhline(np.log10(eps), color="#7f8c8d", lw=1, ls="--", alpha=0.6)
+                axes[ax_i].set_xlabel(_sweep_axis_label(sweep_p), fontsize=8)
+                axes[ax_i].set_ylabel(ylabel, fontsize=8)
+                axes[ax_i].set_title(title, fontsize=9, fontweight="bold")
+                axes[ax_i].tick_params(labelsize=7)
+                if len(series_list) > 1:
+                    axes[ax_i].legend(fontsize=6)
+            fig.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    buf.seek(0)
+    return buf.read()
+
+
+def _render_section7(active_inst: dict, series_list: list) -> None:
+    st.header("7. Summary")
+    if active_inst.get("error"):
+        st.error(active_inst["error"])
+        return
+    summary_text = _build_summary_text(active_inst, series_list)
     st.text_area(
-        "Copy and paste this into an LLM to verify results:",
-        value="\n".join(lines),
-        height=420,
+        "Copy and paste into an LLM to verify results:",
+        value=summary_text,
+        height=440,
     )
 
 
 def _render_section8(active_inst: dict, series_list: list) -> None:
     st.header("8. Save results")
-    st.caption("Coming soon — PDF export of all plots and the summary text.")
+    if active_inst.get("error"):
+        st.error(active_inst["error"])
+        return
+    if st.button("Generate PDF", key="gen_pdf_lab2"):
+        with st.spinner("Building PDF…"):
+            pdf_bytes = _build_pdf_bytes(active_inst, series_list)
+            st.session_state["_lab2_pdf_bytes"] = pdf_bytes
+    pdf_bytes = st.session_state.get("_lab2_pdf_bytes")
+    if pdf_bytes is not None:
+        st.download_button(
+            label="Download PDF",
+            data=pdf_bytes,
+            file_name="eigenvalue_lab_results.pdf",
+            mime="application/pdf",
+        )
+        st.caption("Includes: summary, A heatmap, spectrum plot, and quality metric plots.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
