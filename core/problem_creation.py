@@ -362,6 +362,43 @@ def matrix_info(A) -> dict:
     }
 
 
+def load_npz(file_obj, use_gpu: bool = False):
+    """
+    Load a .npz file saved with scipy.sparse.save_npz() and return a dense array.
+
+    The sparse matrix is converted to dense via .toarray() before any further
+    processing, so the rest of the app sees a plain numpy array.
+
+    Raises ValueError for non-square, non-finite, or wrong-format files.
+    """
+    import io
+    import scipy.sparse as sp
+    raw = io.BytesIO(file_obj.read())
+    try:
+        A_sp = sp.load_npz(raw)
+    except Exception as exc:
+        raise ValueError(f"Could not read sparse .npz file: {exc}") from exc
+
+    arr = A_sp.toarray()
+
+    if arr.ndim != 2:
+        raise ValueError(f"Expected 2-D matrix but got shape {arr.shape}.")
+    if arr.shape[0] != arr.shape[1]:
+        raise ValueError(
+            f"Imported matrix must be square (got {arr.shape[0]} × {arr.shape[1]})."
+        )
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("Imported array contains NaN or Inf values.")
+    if not (np.issubdtype(arr.dtype, np.floating) or
+            np.issubdtype(arr.dtype, np.complexfloating)):
+        arr = arr.astype(np.float64)
+
+    if use_gpu:
+        xp = get_array_module(use_gpu=True)
+        return xp.asarray(arr)
+    return arr
+
+
 def load_npy(file_obj, expected_ndim: int = 2, use_gpu: bool = False):
     """
     Load a .npy file uploaded via Streamlit file_uploader.

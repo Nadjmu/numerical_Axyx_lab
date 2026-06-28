@@ -17,6 +17,7 @@ from core.problem_creation import (
     _BASE_GENERATORS,
     compatible_structures,
     load_npy,
+    load_npz,
 )
 from core.device import gpu_available, gpu_info
 
@@ -133,7 +134,7 @@ def render_problem_ui() -> dict:
     st.header("Matrix A")
 
     # ── Import toggle ─────────────────────────────────────────────────────────
-    import_A = st.checkbox("Import A from .npy file", value=False, key="import_A_cb")
+    import_A = st.checkbox("Import A from .npy / .npz file", value=False, key="import_A_cb")
 
     imported_A_array = None
     matrix_type  = "Custom (imported)" if import_A else None
@@ -148,16 +149,24 @@ def render_problem_ui() -> dict:
 
     if import_A:
         uploaded_A = st.file_uploader(
-            "Upload A  (.npy)", type=["npy"], key="upload_A",
-            help="Save with:  np.save('A.npy', A)",
+            "Upload A  (.npy  or  .npz CSC sparse)",
+            type=["npy", "npz"], key="upload_A",
+            help=(
+                "Dense:   np.save('A.npy', A)\n"
+                "Sparse:  scipy.sparse.save_npz('A.npz', A_csc)"
+            ),
         )
         if uploaded_A is not None:
             try:
-                imported_A_array = load_npy(uploaded_A, expected_ndim=2,
-                                            use_gpu=False)
+                if uploaded_A.name.endswith(".npz"):
+                    imported_A_array = load_npz(uploaded_A, use_gpu=False)
+                else:
+                    imported_A_array = load_npy(uploaded_A, expected_ndim=2,
+                                                use_gpu=False)
                 m_imp, _ = imported_A_array.shape
+                fmt = ".npz (sparse→dense)" if uploaded_A.name.endswith(".npz") else ".npy"
                 st.success(
-                    f"Loaded A: shape {m_imp} × {m_imp},  "
+                    f"Loaded A ({fmt}): shape {m_imp} × {m_imp},  "
                     f"dtype {imported_A_array.dtype},  "
                     f"nnz {int((imported_A_array != 0).sum()):,}"
                 )
@@ -166,7 +175,7 @@ def render_problem_ui() -> dict:
                 st.error(f"Could not load A: {e}")
                 imported_A_array = None
         else:
-            st.info("Upload a .npy file to use a custom matrix.")
+            st.info("Upload a .npy or .npz file to use a custom matrix.")
         m_values = [m]
         st.caption("ℹ️ Structure, size, and symmetry controls are disabled for imported matrices.")
 
